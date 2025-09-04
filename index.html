@@ -2,11 +2,11 @@
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
-  <title>Quét QR Code</title>
+  <title>Quét QR Code (jsQR)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Thư viện html5-qrcode -->
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- Thư viện jsQR -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
 
   <style>
     body {
@@ -18,10 +18,10 @@
       background: #000;
       color: white;
     }
-    #reader {
+    #video {
       flex: 1;
       width: 100%;
-      position: relative;
+      object-fit: cover;
     }
     #controls {
       display: flex;
@@ -53,58 +53,76 @@
   </style>
 </head>
 <body>
-  <div id="reader"></div>
+  <video id="video" playsinline autoplay></video>
+  <canvas id="canvas" hidden></canvas>
 
   <div id="controls">
     <button id="toggleBtn">🔴 Tắt camera</button>
-    <button id="captureBtn">📷 Chụp QR</button>
+    <button id="captureBtn">📷 Chụp ảnh</button>
   </div>
 
   <div id="result">👉 Hướng camera vào QR Code</div>
 
   <script>
-    let html5QrCode;
-    let isRunning = false;
-    const readerId = "reader";
-    const qrBoxSize = 250; // kích thước ô vuông quét QR
-
+    const video = document.getElementById("video");
+    const canvasElement = document.getElementById("canvas");
+    const canvas = canvasElement.getContext("2d");
+    const result = document.getElementById("result");
     const toggleBtn = document.getElementById("toggleBtn");
     const captureBtn = document.getElementById("captureBtn");
-    const resultDiv = document.getElementById("result");
 
-    function onScanSuccess(decodedText) {
-      resultDiv.textContent = "✅ QR Code: " + decodedText;
-    }
-
-    function onScanFailure(error) {
-      // không log lỗi để tránh spam console
-    }
+    let stream = null;
+    let scanning = false;
 
     async function startCamera() {
-      if (!html5QrCode) {
-        html5QrCode = new Html5Qrcode(readerId);
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: "environment" } }
+        });
+      } catch (err) {
+        // fallback nếu exact không hỗ trợ
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" }
+        });
       }
-      await html5QrCode.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: qrBoxSize, height: qrBoxSize } },
-        onScanSuccess,
-        onScanFailure
-      );
-      isRunning = true;
+
+      video.srcObject = stream;
+      video.setAttribute("playsinline", true); // cho iOS Safari
+      video.play();
+      scanning = true;
+      requestAnimationFrame(tick);
       toggleBtn.textContent = "🔴 Tắt camera";
     }
 
     async function stopCamera() {
-      if (html5QrCode && isRunning) {
-        await html5QrCode.stop();
-        isRunning = false;
-        toggleBtn.textContent = "🟢 Bật camera";
-        resultDiv.textContent = "📴 Camera đã tắt";
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
+      scanning = false;
+      toggleBtn.textContent = "🟢 Bật camera";
+      result.textContent = "📴 Camera đã tắt";
+    }
+
+    function tick() {
+      if (scanning && video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvasElement.width = video.videoWidth;
+        canvasElement.height = video.videoHeight;
+        canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+
+        const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "dontInvert"
+        });
+
+        if (code) {
+          result.textContent = "✅ QR Code: " + code.data;
+        }
+      }
+      if (scanning) requestAnimationFrame(tick);
     }
 
     toggleBtn.addEventListener("click", () => {
-      if (isRunning) {
+      if (scanning) {
         stopCamera();
       } else {
         startCamera();
@@ -112,38 +130,17 @@
     });
 
     captureBtn.addEventListener("click", () => {
-      const video = document.querySelector(`#${readerId} video`);
-      if (video) {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        // Tính toán vị trí trung tâm để cắt vùng QR box
-        const videoWidth = video.videoWidth;
-        const videoHeight = video.videoHeight;
-
-        const startX = (videoWidth - qrBoxSize) / 2;
-        const startY = (videoHeight - qrBoxSize) / 2;
-
-        canvas.width = qrBoxSize;
-        canvas.height = qrBoxSize;
-
-        ctx.drawImage(
-          video,
-          startX, startY, qrBoxSize, qrBoxSize, // lấy vùng cắt
-          0, 0, qrBoxSize, qrBoxSize           // vẽ vào canvas
-        );
-
-        // tải ảnh xuống
-        const link = document.createElement("a");
-        link.download = "qr_capture.png";
-        link.href = canvas.toDataURL("image/png");
-        link.click();
-      } else {
-        alert("❌ Chưa có camera hoạt động!");
+      if (!scanning) {
+        alert("❌ Camera chưa bật!");
+        return;
       }
+      const link = document.createElement("a");
+      link.download = "qr_capture.png";
+      link.href = canvasElement.toDataURL("image/png");
+      link.click();
     });
 
-    // auto start khi load
+    // Tự bật camera khi load
     startCamera();
   </script>
 </body>
